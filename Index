@@ -1,0 +1,427 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EXNOVA ROBÔ V18</title>
+
+<style>
+*{box-sizing:border-box}
+body{
+ margin:0;padding:16px;background:#10151f;
+ color:#fff;font-family:Arial,sans-serif
+}
+header{text-align:center;padding:15px}
+h1{color:#36d399}
+.card{
+ background:#1b2636;padding:16px;
+ border-radius:12px;margin:14px 0
+}
+textarea{
+ width:100%;height:130px;background:#10151f;
+ color:white;border:1px solid #526078;
+ border-radius:8px;padding:10px
+}
+button{
+ width:100%;padding:15px;background:#16a36a;
+ color:white;border:0;border-radius:8px;
+ font-weight:bold;font-size:16px;margin-top:12px
+}
+button.secundario{background:#46566e}
+.metric{font-size:20px;color:#36d399;font-weight:bold}
+#signal{font-size:20px;font-weight:bold}
+small{color:#aab6c5}
+.ok{color:#36d399}
+.erro{color:#ff6464}
+.azul{color:#00D5FF}
+.roxo{color:#B060FF}
+.verde{color:#00FF66}
+.vermelho{color:#FF6464}
+.item{padding:8px;margin:5px 0;background:#10151f;border-radius:7px}
+.linha{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+</style>
+</head>
+
+<body>
+
+<header>
+<h1>EXNOVA ROBÔ V18</h1>
+<p>Motor de análise e coleta de mercado</p>
+<p id="status">AGUARDANDO CONEXÃO</p>
+</header>
+
+<div class="card">
+<h3>Configuração</h3>
+<p>Ativo de dados: <b>EUR/USD Forex</b></p>
+<p>Ativo pretendido na Exnova: <b>EUR/USD OTC</b></p>
+<p>Execução planejada: <b>M1</b></p>
+<p>Confirmação: <b>M5</b></p>
+<p>Indicadores: EMA 9 / EMA 21 / RSI 14</p>
+<p>Módulo original: <b>3 velas</b></p>
+<p>Módulo estratégico: <b>5 velas</b></p>
+<small>Os preços Forex da BiQuote não são necessariamente iguais aos preços EUR/USD OTC da Exnova.</small>
+</div>
+
+<div class="card">
+<h3>Conexão BiQuote</h3>
+<p id="conexaoStatus">Desconectado</p>
+<div class="linha">
+ <span>M1 recebidas: <b id="totalM1">--</b></span>
+ <span>M5 completas: <b id="totalM5">--</b></span>
+</div>
+<p id="ultimaAtualizacao"><small>Última atualização: --</small></p>
+<button onclick="conectarBiQuote()">CONECTAR E INICIAR ATUALIZAÇÃO</button>
+<button class="secundario" onclick="pararBiQuote()">PARAR ATUALIZAÇÃO</button>
+<small>O robô consulta a fonte de dados a cada 10 segundos. Isso não conecta nem envia ordens à Exnova.</small>
+</div>
+
+<div class="card">
+<h3>Verificação das velas</h3>
+<p id="lacunas">Aguardando dados...</p>
+<p id="m5Status">Formação M5: aguardando</p>
+</div>
+
+<div class="card">
+<h3>Teste de dados simulados</h3>
+<p id="testeStatus">Aguardando teste...</p>
+<p id="testeM1">Velas M1: --</p>
+<p id="testeM5">Velas M5: --</p>
+<button class="secundario" onclick="carregarTeste()">CARREGAR TESTE AUTOMÁTICO</button>
+<small>O teste substitui temporariamente os dados exibidos por dados simulados. Conecte novamente para voltar aos dados da BiQuote.</small>
+</div>
+
+<div class="card">
+<h3>Velas M1 recebidas</h3>
+<small>Dados fechados recebidos da BiQuote.</small>
+<textarea id="m1" placeholder="Os dados M1 aparecerão aqui." readonly></textarea>
+</div>
+
+<div class="card">
+<h3>Velas M5 completas</h3>
+<small>Cada vela M5 precisa de cinco velas M1 consecutivas.</small>
+<textarea id="m5" placeholder="As velas M5 aparecerão aqui." readonly></textarea>
+</div>
+
+<button onclick="analisar()">ANALISAR MERCADO</button>
+
+<div class="card">
+<h3>Indicadores M1</h3>
+<p>EMA 9: <span id="ema9" class="metric">--</span></p>
+<p>EMA 21: <span id="ema21" class="metric">--</span></p>
+<p>RSI 14: <span id="rsi" class="metric">--</span></p>
+</div>
+
+<div class="card">
+<h3>Confirmação M5</h3>
+<p id="trend" class="metric">--</p>
+<p id="lateral">Mercado lateral: --</p>
+</div>
+
+<div class="card">
+<h3>Central de sinais</h3>
+<p id="signal">AGUARDANDO DADOS</p>
+<div id="details"></div>
+</div>
+
+<div class="card">
+<h3>Histórico de sinais</h3>
+<div id="historico">Nenhuma análise realizada.</div>
+</div>
+
+<div class="card">
+<h3>Execução automática</h3>
+<p class="erro"><b>DESABILITADA</b></p>
+<p>A conexão de ordens com a Exnova ainda não foi implementada.</p>
+<small>Nenhuma operação real ou de demonstração será enviada por esta versão.</small>
+</div>
+
+<script>
+
+/* =====================================
+   CONFIGURAÇÃO DA FONTE DE DADOS
+===================================== */
+
+const URL_BIQUOTE =
+ "https://biquote.io/api/EURUSD/ohlc?interval=1m&limit=300";
+
+let temporizadorBiQuote=null;
+let buscandoDados=false;
+let ultimaListaM1=[];
+let ultimaListaM5=[];
+let ultimaOrigem="";
+
+/* =====================================
+   INDICADORES
+===================================== */
+
+function emaSeries(valores,periodo){
+ const resultado=[];
+ const k=2/(periodo+1);
+ let anterior=valores[0];
+
+ for(let i=0;i<valores.length;i++){
+  if(i===0) anterior=valores[i];
+  else anterior=valores[i]*k+anterior*(1-k);
+
+  resultado.push(anterior);
+ }
+ return resultado;
+}
+
+function rsiSeries(valores,periodo=14){
+ const resultado=Array(valores.length).fill(null);
+
+ if(valores.length<=periodo) return resultado;
+
+ let ganhos=0;
+ let perdas=0;
+
+ for(let i=1;i<=periodo;i++){
+  const dif=valores[i]-valores[i-1];
+  if(dif>0) ganhos+=dif;
+  else perdas-=dif;
+ }
+
+ let ganhoMedio=ganhos/periodo;
+ let perdaMedia=perdas/periodo;
+
+ function calcularRSI(){
+  if(perdaMedia===0) return 100;
+  const rs=ganhoMedio/perdaMedia;
+  return 100-(100/(1+rs));
+ }
+
+ resultado[periodo]=calcularRSI();
+
+ for(let i=periodo+1;i<valores.length;i++){
+  const dif=valores[i]-valores[i-1];
+
+  ganhoMedio=
+   (ganhoMedio*(periodo-1)+Math.max(dif,0))/periodo;
+
+  perdaMedia=
+   (perdaMedia*(periodo-1)+Math.max(-dif,0))/periodo;
+
+  resultado[i]=calcularRSI();
+ }
+
+ return resultado;
+}
+
+/* =====================================
+   VALIDAÇÃO
+===================================== */
+
+function validarVelas(velas){
+ if(!Array.isArray(velas)) return false;
+ if(velas.length<22) return false;
+
+ return velas.every(v=>
+  v &&
+  ["open","high","low","close"].every(k=>
+   Number.isFinite(Number(v[k]))
+  )
+ );
+}
+
+function atualizarTexto(id,texto,classe){
+ const elemento=document.getElementById(id);
+ elemento.textContent=texto;
+ elemento.className=classe||"";
+}
+
+/* =====================================
+   CONVERSÃO E ORGANIZAÇÃO M1
+===================================== */
+
+function normalizarM1(barras){
+
+ if(!Array.isArray(barras)) {
+  throw new Error("A resposta não contém uma lista de velas.");
+ }
+
+ const mapa=new Map();
+
+ for(const v of barras){
+
+  if(!v || v.isOpen===true) continue;
+
+  const horario=new Date(v.openTime).getTime();
+
+  if(!Number.isFinite(horario)) continue;
+
+  const vela={
+   openTime:new Date(horario).toISOString(),
+   timestamp:horario,
+   open:Number(v.open),
+   high:Number(v.high),
+   low:Number(v.low),
+   close:Number(v.close),
+   volume:Number(v.volume||0),
+   tickVolume:Number(v.tickVolume||0)
+  };
+
+  if(
+   !Number.isFinite(vela.open)||
+   !Number.isFinite(vela.high)||
+   !Number.isFinite(vela.low)||
+   !Number.isFinite(vela.close)
+  ) continue;
+
+  if(
+   vela.high<Math.max(vela.open,vela.close)||
+   vela.low>Math.min(vela.open,vela.close)||
+   vela.high<vela.low
+  ) continue;
+
+  mapa.set(horario,vela);
+ }
+
+ return Array.from(mapa.values())
+  .sort((a,b)=>a.timestamp-b.timestamp)
+  .slice(-300);
+}
+
+/* =====================================
+   VERIFICAÇÃO DE LACUNAS M1
+===================================== */
+
+function contarLacunasM1(velas){
+
+ let lacunas=0;
+
+ for(let i=1;i<velas.length;i++){
+  const diferenca=
+   velas[i].timestamp-velas[i-1].timestamp;
+
+  if(diferenca>60000) {
+   lacunas+=Math.round(diferenca/60000)-1;
+  }
+ }
+
+ return lacunas;
+}
+
+/* =====================================
+   CONSTRUÇÃO M5
+   SOMENTE CINCO M1 CONSECUTIVAS
+===================================== */
+
+function construirM5(velas){
+
+ const grupos=new Map();
+
+ for(const v of velas){
+
+  const inicio=Math.floor(v.timestamp/300000)*300000;
+
+  if(!grupos.has(inicio)) grupos.set(inicio,[]);
+
+  grupos.get(inicio).push(v);
+ }
+
+ const resultado=[];
+
+ for(const [inicio,grupo] of grupos){
+
+  grupo.sort((a,b)=>a.timestamp-b.timestamp);
+
+  if(grupo.length!==5) continue;
+
+  let completo=true;
+
+  for(let i=0;i<5;i++){
+   const horarioEsperado=inicio+(i*60000);
+
+   if(grupo[i].timestamp!==horarioEsperado){
+    completo=false;
+    break;
+   }
+  }
+
+  if(!completo) continue;
+
+  const abertura=grupo[0].open;
+  const fechamento=grupo[4].close;
+
+  const maxima=Math.max(...grupo.map(v=>v.high));
+  const minima=Math.min(...grupo.map(v=>v.low));
+
+  resultado.push({
+   openTime:new Date(inicio).toISOString(),
+   timestamp:inicio,
+   open:abertura,
+   high:maxima,
+   low:minima,
+   close:fechamento,
+   volume:grupo.reduce((s,v)=>s+v.volume,0),
+   tickVolume:grupo.reduce((s,v)=>s+v.tickVolume,0)
+  });
+ }
+
+ return resultado.sort((a,b)=>a.timestamp-b.timestamp);
+}
+
+/* =====================================
+   EXIBIÇÃO DOS DADOS
+===================================== */
+
+function exibirDados(m1,m5){
+
+ document.getElementById("m1").value=
+  JSON.stringify(m1,null,1);
+
+ document.getElementById("m5").value=
+  JSON.stringify(m5,null,1);
+
+ document.getElementById("totalM1").textContent=m1.length;
+ document.getElementById("totalM5").textContent=m5.length;
+
+ ultimaListaM1=m1;
+ ultimaListaM5=m5;
+
+ const lacunas=contarLacunasM1(m1);
+
+ if(lacunas===0){
+  atualizarTexto(
+   "lacunas",
+   "Nenhuma lacuna identificada na sequência recebida.",
+   "ok"
+  );
+ }else{
+  atualizarTexto(
+   "lacunas",
+   "ATENÇÃO: "+lacunas+" minuto(s) ausente(s) na sequência M1. Não foram inventadas velas.",
+   "erro"
+  );
+ }
+
+ document.getElementById("m5Status").textContent=
+  "Velas M5 completas formadas: "+m5.length;
+
+ if(m1.length<22 || m5.length<22){
+  document.getElementById("status").textContent=
+   "AGUARDANDO QUANTIDADE SUFICIENTE DE VELAS";
+  return;
+ }
+
+ analisar();
+}
+
+/* =====================================
+   BUSCA BIQUOTE
+===================================== */
+
+async function buscarDadosBiQuote(){
+
+ if(buscandoDados) return;
+
+ buscandoDados=true;
+
+ try{
+
+  document.getElementById("conexaoStatus").textContent=
+   "Consultando BiQuote...";
+
+  const resposta=await fetch(URL_BIQUOTE,{
